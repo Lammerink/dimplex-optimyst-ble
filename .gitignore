@@ -1,0 +1,54 @@
+# secrets (never commit)
+secrets.yaml
+**/secrets.yaml
+*secret*
+wifi_creds*
+
+# BLE captures (contain your device's pairing / MAC)
+*.pcap
+*.pcapng
+
+# third-party / copyrighted (obtain separately)
+# crackle: github.com/mikeryan/crackle (GPLv3)
+crackle/
+# decompiled vendor APKs - do NOT redistribute
+app/
+*.apk
+*.xapk
+
+# media / manuals (copyright or device-specific)
+*.HEIC
+*.heic
+*.mov
+*.mp4
+*_manual.pdf
+CAS400_manual.pdf
+
+# experimental / superseded firmware (see docs/PROTOCOL.md)
+Dimplex_ESP32/
+Dimplex_ESPHome/
+
+# build / tooling / venvs
+.bleakvenv/
+.esphomevenv/
+.nrf_sniffer_venv/
+__pycache__/
+.esphome/
+build/
+*.bin
+*.log
+frames/
+.DS_Store
+
+# loose working copies at repo root (tracked versions live in tools/)
+/u16strings.py
+/decompress_store.py
+/parse_att.py
+/serial_read.py
+/crack_and_parse.sh
+/sweep_levels.py
+/ble_scan.py
+/dimplex_mac.py
+/remote.jpg
+/*.txt
+bttest/
