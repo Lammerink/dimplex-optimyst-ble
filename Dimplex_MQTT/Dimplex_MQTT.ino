@@ -116,11 +116,10 @@ static void sendInit() {
   if (g_h87) { g_h87->writeValue(a87, sizeof(a87), true); delay(120); g_h87->writeValue(b87, sizeof(b87), true); }
   g_initDone = true;
 }
-static void blePower(bool on) {            // 0x0040 = power on/off
+static void blePower(bool on) {            // 0x0040 = power on/off (single write; fire keeps its own level)
   if (!g_ready || !g_ctrl) return;
   if (!g_initDone) sendInit();
   uint8_t v = on ? 0x06 : 0x00; g_ctrl->writeValue(&v, 1, true);
-  if (on && g_lvl) { delay(80); uint8_t L = g_lastLevel; g_lvl->writeValue(&L, 1, true); }  // restore intensity
   Serial.printf("[ble] power -> %s\n", on ? "ON" : "OFF");
 }
 static void bleSetLevel(uint8_t level) {   // 0x0042 = flame intensity 1..6 (independent of power)
