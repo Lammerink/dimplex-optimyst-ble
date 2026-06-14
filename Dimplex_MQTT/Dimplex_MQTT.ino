@@ -17,6 +17,7 @@
 #include <WiFiManager.h>
 #include <Preferences.h>
 #include <PubSubClient.h>
+#include <WebServer.h>
 #include <NimBLEDevice.h>
 #include "esp_gap_ble_api.h"
 
@@ -54,6 +55,8 @@ static const char *T_VOL_CMD = "dimplex/volume/set", *T_VOL_ST = "dimplex/volume
 
 WiFiClient g_wifi;
 PubSubClient g_mqtt(g_wifi);
+WebServer g_web(80);              // control page on the LAN (http://dimplex-atom.local/)
+static bool g_webStarted = false;
 
 static NimBLEClient *g_client = nullptr;
 static NimBLERemoteCharacteristic *g_ctrl = nullptr, *g_h12 = nullptr, *g_h87 = nullptr, *g_vol = nullptr;
@@ -172,7 +175,7 @@ static void mqttCallback(char *topic, byte *payload, unsigned int len) {
   publishState((uint8_t) cmd);   // instant confirm (no HA switch revert)
   g_pubLevel = cmd;
 }
-static bool g_mdnsStarted = false, g_serverSet = false;
+static bool g_serverSet = false;
 // Resolve the configured broker and point PubSubClient at it. Handles a numeric IP,
 // a *.local mDNS name (resolved to an IP), or a plain DNS hostname.
 static void resolveAndSetServer() {
@@ -226,8 +229,44 @@ static void pollAndPublish() {
   }
 }
 
+// ---------------- web control page ----------------
+static String btnRow(const char *kind, int cur) {
+  String s;
+  for (int i = 0; i <= 6; i++) {
+    s += "<a class='b"; s += (i == cur) ? " on'" : "'";
+    s += " href='/set?"; s += kind; s += "="; s += i; s += "'>";
+    s += (i == 0) ? "Off" : String(i); s += "</a> ";
+  }
+  return s;
+}
+static void handleRoot() {
+  String h = "<!DOCTYPE html><html><head><meta name=viewport content='width=device-width,initial-scale=1'>"
+             "<title>Dimplex Fireplace</title><style>body{font-family:sans-serif;max-width:480px;margin:18px auto;"
+             "padding:0 12px;color:#222}h2{color:#e25822}.b{display:inline-block;min-width:34px;text-align:center;"
+             "padding:10px 12px;margin:3px;background:#eee;border-radius:8px;text-decoration:none;color:#222}"
+             ".b.on{background:#e25822;color:#fff}</style></head><body><h2>&#128293; Dimplex Fireplace</h2>";
+  h += "<p><b>Flame:</b> " + String(g_pubLevel < 0 ? 0 : g_pubLevel) +
+       " &nbsp;&nbsp; <b>Volume:</b> " + String(g_pubVol < 0 ? 0 : g_pubVol) + "</p>";
+  h += "<h3>Flame</h3>" + btnRow("flame", g_pubLevel);
+  h += "<h3>Volume</h3>" + btnRow("vol", g_pubVol);
+  h += "<p><a class=b href='/'>&#8635; Refresh</a></p><p style='color:#888;font-size:90%'>";
+  h += g_ready ? "Connected &amp; paired to the fire." : "Connecting to the fire&hellip;";
+  h += "<br>To change WiFi/MQTT: hold the device button ~3s (opens the &lsquo;Dimplex-Setup&rsquo; network).</p>"
+       "</body></html>";
+  g_web.send(200, "text/html", h);
+}
+static void handleSet() {
+  if (g_web.hasArg("flame")) { int n = g_web.arg("flame").toInt(); n = n<0?0:(n>6?6:n);
+    bleSetFlame(n); publishState(n); g_pubLevel = n; }
+  if (g_web.hasArg("vol"))   { int n = g_web.arg("vol").toInt(); n = n<0?0:(n>6?6:n);
+    bleSetVolume(n); char vb[4]; snprintf(vb, sizeof(vb), "%d", n); g_mqtt.publish(T_VOL_ST, vb, true); g_pubVol = n; }
+  g_web.sendHeader("Location", "/"); g_web.send(303);
+}
+static void startWeb() { g_web.on("/", handleRoot); g_web.on("/set", handleSet); g_web.begin(); g_webStarted = true; }
+
 // ---------------- config portal ----------------
 static void runConfigPortal(bool forced) {
+  if (g_webStarted) { g_web.stop(); g_webStarted = false; }   // free port 80 for the AP portal
   wm.setConfigPortalTimeout(180);
   wm.setSaveParamsCallback(saveParamsCallback);
   // refresh param defaults to current values so the page pre-fills
@@ -257,7 +296,8 @@ void setup() {
   wm.addParameter(&p_host); wm.addParameter(&p_port);
   wm.addParameter(&p_user); wm.addParameter(&p_pass);
   wm.setHostname("dimplex-atom");          // STA hostname -> reachable as dimplex-atom.local
-  wm.setConfigPortalBlocking(false);       // keep the web portal non-blocking
+  // (blocking config portal: on boot, if WiFi can't connect it opens the Dimplex-Setup AP
+  //  and waits there for you to set WiFi.)
 
   bool buttonHeld = (digitalRead(BTN_PIN) == LOW);   // hold button at power-on -> portal
   runConfigPortal(buttonHeld);
@@ -269,15 +309,14 @@ void setup() {
 
 void loop() {
   if (WiFi.status() == WL_CONNECTED) {
-    if (!g_mdnsStarted) {
+    if (!g_webStarted) {
       MDNS.begin("dimplex-atom");
       MDNS.addService("http", "tcp", 80);
-      wm.startWebPortal();           // always-on config UI on the LAN
-      g_mdnsStarted = true;
-      Serial.printf("[web] config UI at http://dimplex-atom.local/  (or http://%s/)\n",
+      startWeb();
+      Serial.printf("[web] control UI at http://dimplex-atom.local/  (or http://%s/)\n",
                     WiFi.localIP().toString().c_str());
     }
-    wm.process();                    // serve the web portal
+    g_web.handleClient();            // serve the control page
     static uint32_t lastResolve = 0;
     if (!g_serverSet && millis() - lastResolve > 4000) { lastResolve = millis(); resolveAndSetServer(); }
     if (g_serverSet) { mqttReconnect(); g_mqtt.loop(); }
