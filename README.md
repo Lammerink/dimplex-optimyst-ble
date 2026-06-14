@@ -70,7 +70,9 @@ opens a **captive‑portal setup page**:
 
 1. The Atom starts a Wi‑Fi network **`Dimplex-Setup`** (password `dimplex123`).
 2. Join it from your phone/laptop — a page opens (or browse to `192.168.4.1`).
-3. Enter your **Wi‑Fi** network and your **MQTT broker IP / port / username / password**.
+3. Enter your **Wi‑Fi** network and your **MQTT broker** address (an IP **or** a hostname
+   like `homeassistant.local` — `.local` names are resolved via mDNS), **port, username,
+   password**.
 4. Save → it reboots, connects, and the device appears in Home Assistant.
 
 To **reconfigure later** (router/MQTT changed, moved the fire): **hold the Atom's button

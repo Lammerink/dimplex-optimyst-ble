@@ -13,6 +13,7 @@
  *   - Settings are saved to flash (NVS) and survive reboots/power loss.
  */
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <WiFiManager.h>
 #include <Preferences.h>
 #include <PubSubClient.h>
@@ -32,14 +33,14 @@ static NimBLEAddress FIRE_ADDR("00:a0:50:d6:a5:14", BLE_ADDR_PUBLIC);
 // Leave these blank and configure them on first boot via the "Dimplex-Setup" WiFi
 // portal (hold the Atom button at power-on). Values entered there are saved to flash.
 // (You can hard-code them here instead if you prefer, but don't commit real creds.)
-static char cfg_host[40] = "";       // MQTT broker IP/host
+static char cfg_host[40] = "homeassistant.local";  // MQTT broker: IP, hostname, or *.local (mDNS)
 static char cfg_port[6]  = "1883";
 static char cfg_user[32] = "";       // MQTT username
 static char cfg_pass[40] = "";       // MQTT password
 
 Preferences prefs;
 WiFiManager wm;
-WiFiManagerParameter p_host("host", "MQTT broker IP", cfg_host, 40);
+WiFiManagerParameter p_host("host", "MQTT broker (IP or hostname, e.g. homeassistant.local)", cfg_host, 40);
 WiFiManagerParameter p_port("port", "MQTT port", cfg_port, 6);
 WiFiManagerParameter p_user("user", "MQTT username", cfg_user, 32);
 WiFiManagerParameter p_pass("pass", "MQTT password", cfg_pass, 40);
@@ -170,6 +171,28 @@ static void mqttCallback(char *topic, byte *payload, unsigned int len) {
   publishState((uint8_t) cmd);   // instant confirm (no HA switch revert)
   g_pubLevel = cmd;
 }
+static bool g_mdnsStarted = false, g_serverSet = false;
+// Resolve the configured broker and point PubSubClient at it. Handles a numeric IP,
+// a *.local mDNS name (resolved to an IP), or a plain DNS hostname.
+static void resolveAndSetServer() {
+  IPAddress ip;
+  String h = cfg_host;
+  if (ip.fromString(h)) {                          // already a numeric IP
+    g_mqtt.setServer(ip, (uint16_t) atoi(cfg_port)); g_serverSet = true; return;
+  }
+  if (h.endsWith(".local")) {                      // mDNS name -> resolve to an IP
+    IPAddress mip = MDNS.queryHost(h.substring(0, h.length() - 6), 2000);
+    if ((uint32_t) mip != 0) {
+      Serial.printf("[mdns] %s -> %s\n", cfg_host, mip.toString().c_str());
+      g_mqtt.setServer(mip, (uint16_t) atoi(cfg_port)); g_serverSet = true;
+    } else {
+      Serial.printf("[mdns] could not resolve %s (retrying)\n", cfg_host);
+      g_serverSet = false;
+    }
+    return;
+  }
+  g_mqtt.setServer(cfg_host, (uint16_t) atoi(cfg_port)); g_serverSet = true;  // plain DNS hostname
+}
 static void mqttReconnect() {
   static uint32_t last = 0;
   if (g_mqtt.connected() || millis() - last < 3000) return;
@@ -180,6 +203,10 @@ static void mqttReconnect() {
     g_mqtt.subscribe(T_PWR_CMD); g_mqtt.subscribe(T_LVL_CMD); g_mqtt.subscribe(T_VOL_CMD);
     publishDiscovery();
     g_pubLevel = -1; g_pubVol = -1;
+  } else {
+    Serial.printf("[mqtt] connect failed rc=%d\n", g_mqtt.state());
+    static uint8_t fails = 0;
+    if (++fails >= 3) { fails = 0; g_serverSet = false; }  // re-resolve (broker IP may have changed)
   }
 }
 static void pollAndPublish() {
@@ -210,6 +237,7 @@ static void runConfigPortal(bool forced) {
   if (forced) wm.startConfigPortal("Dimplex-Setup", "dimplex123");
   else        wm.autoConnect("Dimplex-Setup", "dimplex123");
   loadConfig();   // pick up any changes
+  g_serverSet = false;   // re-resolve broker with the (possibly new) host
 }
 
 void setup() {
@@ -231,13 +259,18 @@ void setup() {
   bool buttonHeld = (digitalRead(BTN_PIN) == LOW);   // hold button at power-on -> portal
   runConfigPortal(buttonHeld);
 
-  g_mqtt.setServer(cfg_host, (uint16_t) atoi(cfg_port));
   g_mqtt.setCallback(mqttCallback);
   g_mqtt.setBufferSize(512);
+  // MQTT server is resolved + set in loop() once WiFi (and mDNS for .local) is up.
 }
 
 void loop() {
-  if (WiFi.status() == WL_CONNECTED) { mqttReconnect(); g_mqtt.loop(); }
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!g_mdnsStarted) { MDNS.begin("dimplex-atom"); g_mdnsStarted = true; }
+    static uint32_t lastResolve = 0;
+    if (!g_serverSet && millis() - lastResolve > 4000) { lastResolve = millis(); resolveAndSetServer(); }
+    if (g_serverSet) { mqttReconnect(); g_mqtt.loop(); }
+  }
 
   static uint32_t lastBle = 0;
   if (!g_connected && millis() - lastBle > 5000) { lastBle = millis(); bleConnect(); }
