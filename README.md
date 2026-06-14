@@ -20,10 +20,10 @@ Auto‑discovered MQTT device **"Dimplex CAS400LNH"** with:
 
 | Entity | Type | Notes |
 |---|---|---|
-| **Fireplace** | switch | on / off |
-| **Flame level** | number 0–6 | flame/mist intensity |
+| **Fireplace** | switch | on / off (independent of intensity) |
+| **Flame intensity** | number 1–6 | flame/mist level (does not power off) |
 | **Volume** | number 0–6 | sound (0 = off) |
-| **Flame level state** | sensor | current level |
+| **Flame intensity state** | sensor | current level |
 
 State is polled every ~8 s, so changes made with the **physical remote** show up in HA too.
 
@@ -78,8 +78,9 @@ opens a **captive‑portal setup page**:
 ### Web control page
 
 Once on your network, the bridge serves a small **control page** at
-**`http://dimplex-atom.local/`** (or its IP) — turn the fire on/off and set **flame level**
-and **volume** straight from a browser, without Home Assistant. Changes are mirrored to HA.
+**`http://dimplex-atom.local/`** (or its IP) — with **separate Power (on/off)**, **Flame
+intensity (1–6)** and **Volume (0–6)** controls, straight from a browser without Home
+Assistant. Changes are mirrored to HA.
 
 ### Reconfiguring Wi‑Fi / MQTT
 

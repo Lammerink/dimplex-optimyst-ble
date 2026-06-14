@@ -63,7 +63,7 @@ static NimBLERemoteCharacteristic *g_ctrl = nullptr, *g_lvl = nullptr, *g_h12 = 
 static volatile bool g_connected = false, g_paired = false;
 static bool g_ready = false, g_initDone = false;
 static uint8_t g_lastLevel = 6;
-static int g_pubLevel = -1, g_pubVol = -1;
+static int g_pubPower = -1, g_pubLevel = -1, g_pubVol = -1;
 
 // ---------------- config persistence ----------------
 static void loadConfig() {
@@ -116,19 +116,20 @@ static void sendInit() {
   if (g_h87) { g_h87->writeValue(a87, sizeof(a87), true); delay(120); g_h87->writeValue(b87, sizeof(b87), true); }
   g_initDone = true;
 }
-static void bleSetFlame(uint8_t level) {
+static void blePower(bool on) {            // 0x0040 = power on/off
   if (!g_ready || !g_ctrl) return;
   if (!g_initDone) sendInit();
-  if (level > 6) level = 6;
-  // 0x0040 = on/off (0x06 on / 0x00 off); 0x0042 = flame level 1..6.
-  if (level == 0) {
-    uint8_t off = 0x00; g_ctrl->writeValue(&off, 1, true);
-  } else {
-    uint8_t on = 0x06; g_ctrl->writeValue(&on, 1, true);     // ensure powered on
-    if (g_lvl) { delay(80); uint8_t L = level; g_lvl->writeValue(&L, 1, true); }  // set level
-    g_lastLevel = level;
-  }
-  Serial.printf("[ble] flame -> %s (level %u)\n", level ? "ON" : "OFF", level);
+  uint8_t v = on ? 0x06 : 0x00; g_ctrl->writeValue(&v, 1, true);
+  if (on && g_lvl) { delay(80); uint8_t L = g_lastLevel; g_lvl->writeValue(&L, 1, true); }  // restore intensity
+  Serial.printf("[ble] power -> %s\n", on ? "ON" : "OFF");
+}
+static void bleSetLevel(uint8_t level) {   // 0x0042 = flame intensity 1..6 (independent of power)
+  if (!g_ready || !g_lvl) return;
+  if (!g_initDone) sendInit();
+  if (level < 1) level = 1; if (level > 6) level = 6;
+  g_lastLevel = level;
+  uint8_t L = level; g_lvl->writeValue(&L, 1, true);
+  Serial.printf("[ble] flame intensity -> %u\n", level);
 }
 static void bleSetVolume(uint8_t v) {
   if (!g_ready || !g_vol) return;
@@ -149,9 +150,9 @@ static void publishDiscovery() {
   char b[480];
   snprintf(b, sizeof(b), "{\"name\":\"Fireplace\",\"uniq_id\":\"dimplex_power\",\"cmd_t\":\"%s\",\"stat_t\":\"%s\",\"pl_on\":\"ON\",\"pl_off\":\"OFF\",\"avty_t\":\"%s\",\"ic\":\"mdi:fireplace\",%s}", T_PWR_CMD, T_PWR_ST, T_AVAIL, dev);
   g_mqtt.publish("homeassistant/switch/dimplex/power/config", b, true);
-  snprintf(b, sizeof(b), "{\"name\":\"Flame level\",\"uniq_id\":\"dimplex_level\",\"cmd_t\":\"%s\",\"stat_t\":\"%s\",\"min\":0,\"max\":6,\"step\":1,\"mode\":\"slider\",\"avty_t\":\"%s\",\"ic\":\"mdi:fire\",%s}", T_LVL_CMD, T_LVL_ST, T_AVAIL, dev);
+  snprintf(b, sizeof(b), "{\"name\":\"Flame intensity\",\"uniq_id\":\"dimplex_level\",\"cmd_t\":\"%s\",\"stat_t\":\"%s\",\"min\":1,\"max\":6,\"step\":1,\"mode\":\"slider\",\"avty_t\":\"%s\",\"ic\":\"mdi:fire\",%s}", T_LVL_CMD, T_LVL_ST, T_AVAIL, dev);
   g_mqtt.publish("homeassistant/number/dimplex/level/config", b, true);
-  snprintf(b, sizeof(b), "{\"name\":\"Flame level state\",\"uniq_id\":\"dimplex_levelstate\",\"stat_t\":\"%s\",\"avty_t\":\"%s\",\"ic\":\"mdi:fire\",%s}", T_LVL_ST, T_AVAIL, dev);
+  snprintf(b, sizeof(b), "{\"name\":\"Flame intensity state\",\"uniq_id\":\"dimplex_levelstate\",\"stat_t\":\"%s\",\"avty_t\":\"%s\",\"ic\":\"mdi:fire\",%s}", T_LVL_ST, T_AVAIL, dev);
   g_mqtt.publish("homeassistant/sensor/dimplex/level/config", b, true);
   snprintf(b, sizeof(b), "{\"name\":\"Volume\",\"uniq_id\":\"dimplex_volume\",\"cmd_t\":\"%s\",\"stat_t\":\"%s\",\"min\":0,\"max\":6,\"step\":1,\"mode\":\"slider\",\"avty_t\":\"%s\",\"ic\":\"mdi:volume-high\",%s}", T_VOL_CMD, T_VOL_ST, T_AVAIL, dev);
   g_mqtt.publish("homeassistant/number/dimplex/volume/config", b, true);
@@ -159,10 +160,8 @@ static void publishDiscovery() {
   g_mqtt.publish("homeassistant/binary_sensor/dimplex/water/config", "", true);
   Serial.println("[mqtt] discovery published");
 }
-static void publishState(uint8_t level) {
-  g_mqtt.publish(T_PWR_ST, level ? "ON" : "OFF", true);
-  char b[4]; snprintf(b, sizeof(b), "%u", level); g_mqtt.publish(T_LVL_ST, b, true);
-}
+static void publishPower(bool on) { g_mqtt.publish(T_PWR_ST, on ? "ON" : "OFF", true); }
+static void publishLevel(uint8_t lvl) { char b[4]; snprintf(b, sizeof(b), "%u", lvl); g_mqtt.publish(T_LVL_ST, b, true); }
 static void mqttCallback(char *topic, byte *payload, unsigned int len) {
   String t(topic), p; for (unsigned i = 0; i < len; i++) p += (char) payload[i];
   if (t == T_VOL_CMD) {            // volume control
@@ -172,14 +171,13 @@ static void mqttCallback(char *topic, byte *payload, unsigned int len) {
     g_pubVol = vol;
     return;
   }
-  int cmd = -1;
-  if (t == T_PWR_CMD) cmd = (p == "ON") ? g_lastLevel : 0;
-  else if (t == T_LVL_CMD) cmd = (uint8_t) p.toInt();
-  if (cmd < 0) return;
-  if (cmd > 6) cmd = 6;
-  bleSetFlame((uint8_t) cmd);
-  publishState((uint8_t) cmd);   // instant confirm (no HA switch revert)
-  g_pubLevel = cmd;
+  if (t == T_PWR_CMD) {            // power on/off
+    bool on = (p == "ON"); blePower(on); publishPower(on); g_pubPower = on; return;
+  }
+  if (t == T_LVL_CMD) {            // flame intensity 1..6
+    int n = p.toInt(); if (n < 1) n = 1; if (n > 6) n = 6;
+    bleSetLevel((uint8_t) n); publishLevel(n); g_pubLevel = n; return;
+  }
 }
 static bool g_serverSet = false;
 // Resolve the configured broker and point PubSubClient at it. Handles a numeric IP,
@@ -221,11 +219,13 @@ static void mqttReconnect() {
 }
 static void pollAndPublish() {
   if (!g_ready || !g_ctrl) return;
-  NimBLEAttValue v = g_ctrl->readValue();          // 0x0040: byte0 != 0 => on
+  NimBLEAttValue v = g_ctrl->readValue();          // 0x0040 byte0 != 0 => on
   bool on = (v.length() >= 1 && v[0] != 0);
-  uint8_t level = 0;
-  if (on && g_lvl) { NimBLEAttValue lv = g_lvl->readValue(); if (lv.length() >= 1) level = lv[0]; }  // 0x0042
-  if (level != g_pubLevel) { publishState(level); g_pubLevel = level; Serial.printf("[pub] level=%u\n", level); }
+  if ((int) on != g_pubPower) { publishPower(on); g_pubPower = on; Serial.printf("[pub] power=%d\n", on); }
+  if (g_lvl) {                                     // 0x0042 = flame intensity (independent of power)
+    NimBLEAttValue lv = g_lvl->readValue();
+    if (lv.length() >= 1 && lv[0] != g_pubLevel) { publishLevel(lv[0]); g_pubLevel = lv[0]; Serial.printf("[pub] level=%u\n", lv[0]); }
+  }
   if (g_vol) {                       // poll volume too
     NimBLEAttValue vv = g_vol->readValue();
     if (vv.length() >= 1 && vv[0] != g_pubVol) {
@@ -236,9 +236,9 @@ static void pollAndPublish() {
 }
 
 // ---------------- web control page ----------------
-static String btnRow(const char *kind, int cur) {
+static String btnRow(const char *kind, int cur, int start) {
   String s;
-  for (int i = 0; i <= 6; i++) {
+  for (int i = start; i <= 6; i++) {
     s += "<a class='b"; s += (i == cur) ? " on'" : "'";
     s += " href='/set?"; s += kind; s += "="; s += i; s += "'>";
     s += (i == 0) ? "Off" : String(i); s += "</a> ";
@@ -251,10 +251,13 @@ static void handleRoot() {
              "padding:0 12px;color:#222}h2{color:#e25822}.b{display:inline-block;min-width:34px;text-align:center;"
              "padding:10px 12px;margin:3px;background:#eee;border-radius:8px;text-decoration:none;color:#222}"
              ".b.on{background:#e25822;color:#fff}</style></head><body><h2>&#128293; Dimplex Fireplace</h2>";
-  h += "<p><b>Flame:</b> " + String(g_pubLevel < 0 ? 0 : g_pubLevel) +
+  h += "<p><b>Power:</b> " + String(g_pubPower == 1 ? "On" : (g_pubPower == 0 ? "Off" : "?")) +
+       " &nbsp;&nbsp; <b>Flame:</b> " + String(g_pubLevel < 1 ? 1 : g_pubLevel) +
        " &nbsp;&nbsp; <b>Volume:</b> " + String(g_pubVol < 0 ? 0 : g_pubVol) + "</p>";
-  h += "<h3>Flame</h3>" + btnRow("flame", g_pubLevel);
-  h += "<h3>Volume</h3>" + btnRow("vol", g_pubVol);
+  h += "<h3>Power</h3><a class='b"; h += (g_pubPower == 1) ? " on'" : "'"; h += " href='/set?power=on'>On</a> ";
+  h += "<a class='b"; h += (g_pubPower == 0) ? " on'" : "'"; h += " href='/set?power=off'>Off</a>";
+  h += "<h3>Flame intensity</h3>" + btnRow("flame", g_pubLevel, 1);
+  h += "<h3>Volume</h3>" + btnRow("vol", g_pubVol, 0);
   h += "<p><a class=b href='/'>&#8635; Refresh</a></p><p style='color:#888;font-size:90%'>";
   h += g_ready ? "Connected &amp; paired to the fire." : "Connecting to the fire&hellip;";
   h += "<br>To change WiFi/MQTT: hold the device button ~3s (opens the &lsquo;Dimplex-Setup&rsquo; network).</p>"
@@ -262,8 +265,9 @@ static void handleRoot() {
   g_web.send(200, "text/html", h);
 }
 static void handleSet() {
-  if (g_web.hasArg("flame")) { int n = g_web.arg("flame").toInt(); n = n<0?0:(n>6?6:n);
-    bleSetFlame(n); publishState(n); g_pubLevel = n; }
+  if (g_web.hasArg("power")) { bool on = (g_web.arg("power") == "on"); blePower(on); publishPower(on); g_pubPower = on; }
+  if (g_web.hasArg("flame")) { int n = g_web.arg("flame").toInt(); n = n<1?1:(n>6?6:n);
+    bleSetLevel(n); publishLevel(n); g_pubLevel = n; }
   if (g_web.hasArg("vol"))   { int n = g_web.arg("vol").toInt(); n = n<0?0:(n>6?6:n);
     bleSetVolume(n); char vb[4]; snprintf(vb, sizeof(vb), "%d", n); g_mqtt.publish(T_VOL_ST, vb, true); g_pubVol = n; }
   g_web.sendHeader("Location", "/"); g_web.send(303);
