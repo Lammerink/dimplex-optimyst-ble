@@ -256,6 +256,8 @@ void setup() {
 
   wm.addParameter(&p_host); wm.addParameter(&p_port);
   wm.addParameter(&p_user); wm.addParameter(&p_pass);
+  wm.setHostname("dimplex-atom");          // STA hostname -> reachable as dimplex-atom.local
+  wm.setConfigPortalBlocking(false);       // keep the web portal non-blocking
 
   bool buttonHeld = (digitalRead(BTN_PIN) == LOW);   // hold button at power-on -> portal
   runConfigPortal(buttonHeld);
@@ -267,7 +269,15 @@ void setup() {
 
 void loop() {
   if (WiFi.status() == WL_CONNECTED) {
-    if (!g_mdnsStarted) { MDNS.begin("dimplex-atom"); g_mdnsStarted = true; }
+    if (!g_mdnsStarted) {
+      MDNS.begin("dimplex-atom");
+      MDNS.addService("http", "tcp", 80);
+      wm.startWebPortal();           // always-on config UI on the LAN
+      g_mdnsStarted = true;
+      Serial.printf("[web] config UI at http://dimplex-atom.local/  (or http://%s/)\n",
+                    WiFi.localIP().toString().c_str());
+    }
+    wm.process();                    // serve the web portal
     static uint32_t lastResolve = 0;
     if (!g_serverSet && millis() - lastResolve > 4000) { lastResolve = millis(); resolveAndSetServer(); }
     if (g_serverSet) { mqttReconnect(); g_mqtt.loop(); }

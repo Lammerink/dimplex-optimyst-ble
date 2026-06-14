@@ -75,9 +75,15 @@ opens a **captive‑portal setup page**:
    password**.
 4. Save → it reboots, connects, and the device appears in Home Assistant.
 
-To **reconfigure later** (router/MQTT changed, moved the fire): **hold the Atom's button
-while powering on**, or **hold it ~3 s while running** — the same portal opens. Settings
-are stored in flash and survive power loss. Wi‑Fi credentials are never written to source.
+### Reaching it later
+
+Once it's on your network, the bridge runs an always‑on management page at
+**`http://dimplex-atom.local/`** (or its IP). From there you can see status (Info),
+reconfigure Wi‑Fi + MQTT (Configure WiFi), and do a browser OTA firmware update (Update).
+
+You can also reopen the full Wi‑Fi setup AP by **holding the Atom's button while powering
+on**, or **holding it ~3 s while running**. Settings are stored in flash and survive power
+loss. Wi‑Fi credentials are never written to source.
 
 ## Mapping more controls
 
