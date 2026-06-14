@@ -59,7 +59,7 @@ WebServer g_web(80);              // control page on the LAN (http://dimplex-ato
 static bool g_webStarted = false;
 
 static NimBLEClient *g_client = nullptr;
-static NimBLERemoteCharacteristic *g_ctrl = nullptr, *g_h12 = nullptr, *g_h87 = nullptr, *g_vol = nullptr;
+static NimBLERemoteCharacteristic *g_ctrl = nullptr, *g_lvl = nullptr, *g_h12 = nullptr, *g_h87 = nullptr, *g_vol = nullptr;
 static volatile bool g_connected = false, g_paired = false;
 static bool g_ready = false, g_initDone = false;
 static uint8_t g_lastLevel = 6;
@@ -92,7 +92,7 @@ class ClientCB : public NimBLEClientCallbacks {
   void onConnect(NimBLEClient *) override { g_connected = true; Serial.println("[ble] connected"); }
   void onDisconnect(NimBLEClient *, int reason) override {
     Serial.printf("[ble] disconnected (%d)\n", reason);
-    g_connected = g_paired = g_ready = g_initDone = false; g_ctrl = g_h12 = g_h87 = nullptr;
+    g_connected = g_paired = g_ready = g_initDone = false; g_ctrl = g_lvl = g_h12 = g_h87 = g_vol = nullptr;
   }
   void onPassKeyEntry(NimBLEConnInfo &ci) override { NimBLEDevice::injectPassKey(ci, PASSKEY); }
   void onConfirmPasskey(NimBLEConnInfo &ci, uint32_t) override { NimBLEDevice::injectConfirmPasskey(ci, true); }
@@ -105,7 +105,7 @@ static bool resolveChars() {
   for (auto *s : g_client->getServices(true))
     for (auto *c : s->getCharacteristics(true)) {
       uint16_t h = c->getHandle();
-      if (h == 0x0040) g_ctrl = c; else if (h == 0x0012) g_h12 = c;
+      if (h == 0x0040) g_ctrl = c; else if (h == 0x0042) g_lvl = c; else if (h == 0x0012) g_h12 = c;
       else if (h == 0x0087) g_h87 = c; else if (h == 0x0076) g_vol = c;
     }
   return g_ctrl != nullptr;
@@ -120,9 +120,15 @@ static void bleSetFlame(uint8_t level) {
   if (!g_ready || !g_ctrl) return;
   if (!g_initDone) sendInit();
   if (level > 6) level = 6;
-  if (level > 0) g_lastLevel = level;
-  uint8_t v = level; g_ctrl->writeValue(&v, 1, true);
-  Serial.printf("[ble] flame -> %s (0x%02x)\n", level ? "ON" : "OFF", level);
+  // 0x0040 = on/off (0x06 on / 0x00 off); 0x0042 = flame level 1..6.
+  if (level == 0) {
+    uint8_t off = 0x00; g_ctrl->writeValue(&off, 1, true);
+  } else {
+    uint8_t on = 0x06; g_ctrl->writeValue(&on, 1, true);     // ensure powered on
+    if (g_lvl) { delay(80); uint8_t L = level; g_lvl->writeValue(&L, 1, true); }  // set level
+    g_lastLevel = level;
+  }
+  Serial.printf("[ble] flame -> %s (level %u)\n", level ? "ON" : "OFF", level);
 }
 static void bleSetVolume(uint8_t v) {
   if (!g_ready || !g_vol) return;
@@ -215,11 +221,11 @@ static void mqttReconnect() {
 }
 static void pollAndPublish() {
   if (!g_ready || !g_ctrl) return;
-  NimBLEAttValue v = g_ctrl->readValue();
-  if (v.length() >= 1) {
-    uint8_t level = v[0];
-    if (level != g_pubLevel) { publishState(level); g_pubLevel = level; Serial.printf("[pub] level=%u\n", level); }
-  }
+  NimBLEAttValue v = g_ctrl->readValue();          // 0x0040: byte0 != 0 => on
+  bool on = (v.length() >= 1 && v[0] != 0);
+  uint8_t level = 0;
+  if (on && g_lvl) { NimBLEAttValue lv = g_lvl->readValue(); if (lv.length() >= 1) level = lv[0]; }  // 0x0042
+  if (level != g_pubLevel) { publishState(level); g_pubLevel = level; Serial.printf("[pub] level=%u\n", level); }
   if (g_vol) {                       // poll volume too
     NimBLEAttValue vv = g_vol->readValue();
     if (vv.length() >= 1 && vv[0] != g_pubVol) {

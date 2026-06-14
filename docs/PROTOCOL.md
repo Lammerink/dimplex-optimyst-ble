@@ -51,15 +51,18 @@ The remote talks to **raw attribute handles** (it knows them a priori). The fire
 
 | Handle | UUID | Meaning | Values |
 |---|---|---|---|
-| `0x0040` | `0x4008` | **Flame on/off + level** (byte 1); **low‑water latch** (byte 2) | b1: `00`=off, `01`–`06`=level · b2: `00`=ok, `01`=needs‑water |
+| `0x0040` | `0x4008` | **Power on/off** (byte 1); **low‑water latch** (byte 2) | b1: `00`=off, `06`=on · b2: `00`=ok, `01`=needs‑water |
+| `0x0042` | `0x4009` | **Flame level** (write here to set level) | `01`–`06` |
 | `0x0076` | `0x4010` | **Volume / sound** | `00`=off, `01`–`06` |
 | `0x0010` | `0x0006` | **Clock** (7 bytes) | `YYh YYl MM DD HH MM SS` e.g. `14 1a 06 0e 17 18 01` = 2026‑06‑14 23:24:01 |
 | `0x0012` | `0x0106` | **Clock + extra byte** (8 bytes) | as above + trailing byte (DST / day‑of‑week) |
-| `0x0042` | `0x4009` | mirrors flame level | `00`–`06` |
-| `0x005d` | `0x4000` | flame intensity? | `01 64` (`0x64` = 100 %) |
-| `0x0063` | `0x4004` | intensity? | `00 64` |
+| `0x0063` | `0x4004` | resulting flame intensity % (read‑only effect of the level) | byte 2: `0x64`=100 % @L6, `0x34`=52 % @L2 |
+| `0x005d` | `0x4000` | on + intensity (tracks power) | `01 64` when on |
 
-Reads of `0x0040` return 2 bytes: `[level][status]`. Writing a single byte sets the level.
+**Setting the flame:** `0x0040` is on/off ONLY (`0x06`/`0x00`); the **1–6 level is a separate
+register, `0x0042`**. Writing the level into `0x0040` does NOT work (only `0x06`/`0x00` are
+valid there) — set power via `0x0040`, then the level via `0x0042`. (Confirmed by diffing the
+remote's flame‑up/down against a register dump.)
 
 ### Per‑connection session init (replayed by the remote, and by this firmware)
 
