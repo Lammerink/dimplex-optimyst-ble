@@ -2,8 +2,10 @@
  * Dimplex CAS400LNH -> Home Assistant via MQTT (M5Stack Atom Lite / ESP32-PICO-D4)
  * Board: M5Atom.  Libraries: NimBLE-Arduino 2.x, PubSubClient, WiFiManager, built-in WiFi.
  *
- * BLE (NimBLE): pair w/ fixed passkey 584936, control characteristic handle 0x0040
- * (byte1 = flame level 0..6). Bridges to Home Assistant over MQTT auto-discovery.
+ * BLE (NimBLE): auto-detects the fireplace by advertised name ("FI####<Dimplex>") and
+ * pairs with a passkey (default 584936). Control via raw handles (0x0040 power, 0x0042
+ * flame, 0x0076 volume). Bridges to Home Assistant over MQTT auto-discovery. The BLE
+ * address and passkey can be overridden in the setup portal (with a scan-to-pick list).
  *
  * CONFIG PORTAL (WiFiManager): no need to re-flash for WiFi/MQTT changes.
  *   - First boot (or WiFi fails): starts an AP "Dimplex-Setup" (pass "dimplex123").
@@ -22,13 +24,19 @@
 #include "esp_gap_ble_api.h"
 
 #define BTN_PIN 39
-// Fixed BLE pairing passkey for this fire. 584936 worked on the author's CAS400LNH;
-// it may be universal for this product line or per-unit. If pairing fails, find yours
-// by sniffing the remote's pairing and cracking it (see docs/PROTOCOL.md).
-static const uint32_t PASSKEY = 584936;
-// Your fireplace's BLE address — change to match yours (see it in nRF Connect, or it
-// advertises as "FI####<Dimplex>").
-static NimBLEAddress FIRE_ADDR("00:a0:50:d6:a5:14", BLE_ADDR_PUBLIC);
+
+// ---- Fireplace identity (auto-detected by default; override in the setup portal) ----
+// The bridge finds your fireplace by scanning for a BLE device whose advertised name
+// contains "Dimplex" (they show up as "FI####<Dimplex>"), so normally you set nothing.
+// If you have more than one, or want to pin a specific unit, enter its BLE address in the
+// "Dimplex-Setup" portal (there's a scan-to-pick list). The passkey 584936 worked on the
+// author's CAS400LNH; it may be universal for this product line or per-unit — if pairing
+// fails, find yours by sniffing + cracking the remote's pairing (see docs/PROTOCOL.md).
+#define FP_NAME_MATCH  "Dimplex"        // advertised-name substring used for auto-detect
+#define DEFAULT_PASSKEY "584936"        // default pairing passkey (portal-overridable)
+static char cfg_addr[20] = "";          // "" = auto-detect; else a pinned BLE MAC
+static char cfg_pkey[12] = DEFAULT_PASSKEY;
+static uint32_t g_passkey = 584936;     // parsed from cfg_pkey at load time
 
 // ---- MQTT settings (defaults) ----
 // >>> USE YOUR OWN MQTT CREDENTIALS <<<
@@ -48,6 +56,12 @@ WiFiManagerParameter p_host("host", "MQTT broker (IP or hostname, e.g. homeassis
 WiFiManagerParameter p_port("port", "MQTT port", cfg_port, 6);
 WiFiManagerParameter p_user("user", "MQTT username", cfg_user, 32);
 WiFiManagerParameter p_pass("pass", "MQTT password", cfg_pass, 40);
+// Fireplace picker: a <select> filled from a BLE scan when the portal opens; choosing an
+// entry fills the address field below. Leave the address blank to auto-detect.
+static char g_scanHtml[1400] = "";
+WiFiManagerParameter p_scan(g_scanHtml);
+WiFiManagerParameter p_addr("fpaddr", "Fireplace BLE address (blank = auto-detect)", cfg_addr, 19);
+WiFiManagerParameter p_pkey("pkey", "Pairing passkey", cfg_pkey, 11);
 
 // MQTT topics
 static const char *T_AVAIL = "dimplex/status";
@@ -64,6 +78,9 @@ static NimBLEClient *g_client = nullptr;
 static NimBLERemoteCharacteristic *g_ctrl = nullptr, *g_lvl = nullptr, *g_h12 = nullptr, *g_h87 = nullptr, *g_vol = nullptr;
 static volatile bool g_connected = false, g_paired = false;
 static bool g_ready = false, g_initDone = false;
+static bool g_haveTarget = false;        // whether g_target holds a resolved address
+static NimBLEAddress g_target;           // the fireplace we connect to (pinned or auto-detected)
+static char g_detaddr[20] = "";          // last auto-detected address, remembered in NVS
 static uint8_t g_lastLevel = 6;
 static int g_pubPower = -1, g_pubLevel = -1, g_pubVol = -1;
 
@@ -75,18 +92,37 @@ static void loadConfig() {
   strlcpy(cfg_port, prefs.getString("port", cfg_port).c_str(), sizeof(cfg_port));
   strlcpy(cfg_user, prefs.getString("user", cfg_user).c_str(), sizeof(cfg_user));
   strlcpy(cfg_pass, prefs.getString("pass", cfg_pass).c_str(), sizeof(cfg_pass));
+  strlcpy(cfg_addr, prefs.getString("addr", cfg_addr).c_str(), sizeof(cfg_addr));
+  strlcpy(cfg_pkey, prefs.getString("pkey", cfg_pkey).c_str(), sizeof(cfg_pkey));
+  strlcpy(g_detaddr, prefs.getString("detaddr", "").c_str(), sizeof(g_detaddr));
   prefs.end();
+  unsigned long k = strtoul(cfg_pkey, nullptr, 10);
+  g_passkey = (k > 0 && k <= 999999) ? (uint32_t) k : 584936;   // 6-digit legacy passkey
+}
+// Remember (or clear) the auto-detected address so we skip scanning on later boots.
+static void saveDetectedAddr(const char *mac) {
+  strlcpy(g_detaddr, mac ? mac : "", sizeof(g_detaddr));
+  prefs.begin("cfg", false); prefs.putString("detaddr", g_detaddr); prefs.end();
 }
 static void saveParamsCallback() {
   strncpy(cfg_host, p_host.getValue(), sizeof(cfg_host));
   strncpy(cfg_port, p_port.getValue(), sizeof(cfg_port));
   strncpy(cfg_user, p_user.getValue(), sizeof(cfg_user));
   strncpy(cfg_pass, p_pass.getValue(), sizeof(cfg_pass));
+  strncpy(cfg_addr, p_addr.getValue(), sizeof(cfg_addr));
+  strncpy(cfg_pkey, p_pkey.getValue(), sizeof(cfg_pkey));
   prefs.begin("cfg", false);
   prefs.putString("host", cfg_host); prefs.putString("port", cfg_port);
   prefs.putString("user", cfg_user); prefs.putString("pass", cfg_pass);
+  prefs.putString("addr", cfg_addr); prefs.putString("pkey", cfg_pkey);
+  prefs.putString("detaddr", "");   // forget any remembered auto-detect; resolve fresh
   prefs.end();
-  Serial.printf("[cfg] saved: host=%s port=%s user=%s\n", cfg_host, cfg_port, cfg_user);
+  g_detaddr[0] = 0;
+  unsigned long k = strtoul(cfg_pkey, nullptr, 10);
+  g_passkey = (k > 0 && k <= 999999) ? (uint32_t) k : 584936;
+  g_haveTarget = false;   // re-resolve the fireplace with the (possibly new) address
+  Serial.printf("[cfg] saved: host=%s port=%s user=%s addr=%s\n",
+                cfg_host, cfg_port, cfg_user, strlen(cfg_addr) ? cfg_addr : "(auto)");
 }
 
 // ---------------- BLE (NimBLE) ----------------
@@ -96,7 +132,7 @@ class ClientCB : public NimBLEClientCallbacks {
     Serial.printf("[ble] disconnected (%d)\n", reason);
     g_connected = g_paired = g_ready = g_initDone = false; g_ctrl = g_lvl = g_h12 = g_h87 = g_vol = nullptr;
   }
-  void onPassKeyEntry(NimBLEConnInfo &ci) override { NimBLEDevice::injectPassKey(ci, PASSKEY); }
+  void onPassKeyEntry(NimBLEConnInfo &ci) override { NimBLEDevice::injectPassKey(ci, g_passkey); }
   void onConfirmPasskey(NimBLEConnInfo &ci, uint32_t) override { NimBLEDevice::injectConfirmPasskey(ci, true); }
   void onAuthenticationComplete(NimBLEConnInfo &ci) override {
     Serial.printf("[sec] auth complete enc=%d\n", ci.isEncrypted()); g_paired = ci.isEncrypted();
@@ -138,10 +174,70 @@ static void bleSetVolume(uint8_t v) {
   g_vol->writeValue(&v, 1, true);
   Serial.printf("[ble] volume -> %u\n", v);
 }
+// Scan for a fireplace by advertised name. Returns true and sets `out` on the first match.
+static bool discoverFireplace(NimBLEAddress &out) {
+  NimBLEScan *scan = NimBLEDevice::getScan();
+  scan->setActiveScan(true);                       // active scan -> we get scan-response names
+  NimBLEScanResults res = scan->getResults(4000, false);
+  bool found = false;
+  for (int i = 0; i < res.getCount(); i++) {
+    const NimBLEAdvertisedDevice *d = res.getDevice(i);
+    if (String(d->getName().c_str()).indexOf(FP_NAME_MATCH) < 0) continue;
+    out = d->getAddress(); found = true; break;
+  }
+  scan->clearResults();
+  return found;
+}
+// Scan and build the portal's <select> of found fireplaces (choosing one fills #fpaddr).
+static void refreshScanParam() {
+  Serial.println("[ble] scanning for fireplaces (setup portal)...");
+  NimBLEScan *scan = NimBLEDevice::getScan();
+  scan->setActiveScan(true);
+  NimBLEScanResults res = scan->getResults(4000, false);
+  String o = "<label for='fpaddr'>Fireplace (from scan)</label>"
+             "<select onchange=\"var e=document.getElementById('fpaddr');if(e)e.value=this.value;\" "
+             "style='width:100%;padding:5px;margin:2px 0'>"
+             "<option value=''>Auto-detect (recommended)</option>";
+  int n = 0;
+  for (int i = 0; i < res.getCount(); i++) {
+    const NimBLEAdvertisedDevice *d = res.getDevice(i);
+    String name = d->getName().c_str();
+    if (name.indexOf(FP_NAME_MATCH) < 0) continue;
+    String mac = d->getAddress().toString().c_str();
+    name.replace("<", "&lt;"); name.replace(">", "&gt;");     // "<Dimplex>" would break the HTML
+    o += "<option value='" + mac + "'>" + name + " &mdash; " + mac + "</option>";
+    n++;
+  }
+  o += "</select>";
+  scan->clearResults();
+  strlcpy(g_scanHtml, o.c_str(), sizeof(g_scanHtml));
+  Serial.printf("[ble] scan found %d fireplace(s)\n", n);
+}
 static void bleConnect() {
   if (g_connected) return;
   if (!g_client) { g_client = NimBLEDevice::createClient(); g_client->setClientCallbacks(new ClientCB(), false); }
-  if (!g_client->connect(FIRE_ADDR)) { Serial.println("[ble] connect failed"); return; }
+  if (!g_haveTarget) {                               // resolve which fireplace to talk to
+    if (strlen(cfg_addr) >= 17) {                    // pinned address from the portal
+      g_target = NimBLEAddress(cfg_addr, BLE_ADDR_PUBLIC); g_haveTarget = true;
+    } else if (strlen(g_detaddr) >= 17) {            // remembered from a previous auto-detect
+      g_target = NimBLEAddress(g_detaddr, BLE_ADDR_PUBLIC); g_haveTarget = true;
+      Serial.printf("[ble] using remembered fireplace %s\n", g_detaddr);
+    } else if (discoverFireplace(g_target)) {        // fresh auto-detect by name
+      g_haveTarget = true;
+      saveDetectedAddr(g_target.toString().c_str());
+      Serial.printf("[ble] auto-detected fireplace %s (remembered)\n", g_detaddr);
+    } else {
+      Serial.println("[ble] no fireplace found in scan (will retry)"); return;
+    }
+  }
+  if (!g_client->connect(g_target)) {
+    Serial.println("[ble] connect failed");
+    if (!strlen(cfg_addr)) {                         // auto mode: drop target, and if it was a
+      g_haveTarget = false;                          // remembered address, forget it and re-scan
+      if (strlen(g_detaddr)) { Serial.println("[ble] forgetting remembered address; will re-scan"); saveDetectedAddr(""); }
+    }
+    return;
+  }
   if (!g_client->secureConnection()) { Serial.println("[ble] secure failed"); return; }
 }
 
@@ -260,8 +356,11 @@ static void handleRoot() {
   h += "<h3>Flame intensity</h3>" + btnRow("flame", g_pubLevel, 1);
   h += "<h3>Volume</h3>" + btnRow("vol", g_pubVol, 0);
   h += "<p><a class=b href='/'>&#8635; Refresh</a></p><p style='color:#888;font-size:90%'>";
-  h += g_ready ? "Connected &amp; paired to the fire." : "Connecting to the fire&hellip;";
-  h += "<br>To change WiFi/MQTT: hold the device button ~3s (opens the &lsquo;Dimplex-Setup&rsquo; network).</p>"
+  h += g_ready ? "Connected &amp; paired to the fireplace." : "Connecting to the fireplace&hellip;";
+  h += "<br>Fireplace: ";
+  h += strlen(cfg_addr) ? cfg_addr : "auto-detect";
+  if (g_haveTarget) { h += " ("; h += g_target.toString().c_str(); h += ")"; }
+  h += "<br>To change WiFi/MQTT/fireplace: hold the device button ~3s (opens the &lsquo;Dimplex-Setup&rsquo; network).</p>"
        "</body></html>";
   g_web.send(200, "text/html", h);
 }
@@ -283,6 +382,10 @@ static void runConfigPortal(bool forced) {
   // refresh param defaults to current values so the page pre-fills
   p_host.setValue(cfg_host, 40); p_port.setValue(cfg_port, 6);
   p_user.setValue(cfg_user, 32); p_pass.setValue(cfg_pass, 40);
+  p_addr.setValue(cfg_addr, 19); p_pkey.setValue(cfg_pkey, 11);
+  // scan for nearby fireplaces to fill the picker, but only when the portal will show
+  // (forced by the button, or first boot with no saved WiFi) — avoids delaying normal boots
+  if (forced || !wm.getWiFiIsSaved()) refreshScanParam();
   Serial.println(forced ? "[cfg] opening setup portal (join WiFi 'Dimplex-Setup' / pass 'dimplex123')"
                         : "[wifi] connecting to saved network (opens 'Dimplex-Setup' portal only if none saved / connect fails)");
   if (forced) wm.startConfigPortal("Dimplex-Setup", "dimplex123");
@@ -304,6 +407,7 @@ void setup() {
   NimBLEDevice::setSecurityAuth(false, true, false);
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_KEYBOARD_DISPLAY);
 
+  wm.addParameter(&p_scan); wm.addParameter(&p_addr); wm.addParameter(&p_pkey);
   wm.addParameter(&p_host); wm.addParameter(&p_port);
   wm.addParameter(&p_user); wm.addParameter(&p_pass);
   wm.setHostname("dimplex-atom");          // STA hostname -> reachable as dimplex-atom.local
