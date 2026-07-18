@@ -1,8 +1,9 @@
 # Dimplex Opti‑myst (Cassette 400 / CAS400LNH) → Home Assistant over BLE
 
-Control a **Dimplex Opti‑myst Cassette electric fireplace** (the older Bluetooth‑remote
-generation, BLE service `00060000‑f8ce‑11e4‑…`) from **Home Assistant**, using an
-**M5Stack Atom Lite (ESP32)** as a BLE↔MQTT bridge.
+Control a **Dimplex Opti‑myst Cassette electric fireplace**
+([Cassette 400/600 LED](https://www.dimplexfires.com/en-nl/cassette-400-600-led) — the
+older Bluetooth‑remote generation, BLE service `00060000‑f8ce‑11e4‑…`) from **Home
+Assistant**, using an **M5Stack Atom Lite (ESP32)** as a BLE↔MQTT bridge.
 
 This Dimplex fireplace pairs with its remote using **authenticated Bluetooth pairing (LE legacy
 passkey)** — so you *cannot* just replay commands; you have to pair. There is **no
