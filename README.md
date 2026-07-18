@@ -8,7 +8,9 @@ This fire pairs with its remote using **authenticated Bluetooth pairing (LE lega
 passkey)** — so you *cannot* just replay commands; you have to pair. There is **no
 public documentation or app** for this generation's protocol (the current Dimplex/Faber
 apps speak a newer, different protocol). This repo is the result of reverse‑engineering
-it from scratch. See **[docs/PROTOCOL.md](docs/PROTOCOL.md)** for the full protocol.
+it from scratch. See **[docs/PROTOCOL.md](docs/PROTOCOL.md)** for the full protocol, and
+**[docs/REVERSE-ENGINEERING.md](docs/REVERSE-ENGINEERING.md)** for how it was cracked and
+how to replicate it on your own unit (e.g. if your pairing passkey differs).
 
 > ⚠️ The pairing passkey here (`584936`) is the one that worked on the author's unit.
 > It may be universal for this product line or unique per unit — if pairing fails,
