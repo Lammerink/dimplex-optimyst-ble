@@ -13,8 +13,8 @@ it from scratch. See **[docs/PROTOCOL.md](docs/PROTOCOL.md)** for the full proto
 **[docs/REVERSE-ENGINEERING.md](docs/REVERSE-ENGINEERING.md)** for how it was cracked and
 how to replicate it on your own unit (e.g. if your pairing passkey differs).
 
-> ⚠️ The pairing passkey here (`584936`) is the one that worked on the author's unit.
-> It may be universal for this product line or unique per unit — if pairing fails,
+> **Note:** the passkey here (`584936`) is the one that worked on the author's unit. It may
+> be shared across the product line or unique per unit — if pairing fails,
 > [find yours](docs/PROTOCOL.md#finding-your-passkey).
 
 ## What you get in Home Assistant
@@ -37,7 +37,7 @@ catches up within a few seconds.
 > For that reason this project **doesn't expose it as a sensor**. If you want to experiment
 > with it, see [docs/PROTOCOL.md](docs/PROTOCOL.md#low-water-flag).
 
-> ⚠️ **The handheld BLE remote won't work while the bridge is connected.** The fireplace
+> **The handheld BLE remote won't work while the bridge is connected.** The fireplace
 > only accepts **one** Bluetooth connection at a time, and the bridge holds it continuously.
 > While the Atom is running you control the fireplace from Home Assistant (or the web page),
 > not the remote. To use the original remote again, power off the Atom to free the

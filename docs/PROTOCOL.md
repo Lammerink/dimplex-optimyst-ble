@@ -19,21 +19,29 @@ Dimplex *Flame Connect* / Faber *ITC* apps speak a different, newer protocol and
 | Custom service | `00060000-F8CE-11E4-ABF4-0002A5D5C51C` |
 | “Known” characteristic | `00060001-…` (value handle `0x00A2`, props NOTIFY/WRITE) — **not** the control channel |
 
-## Pairing / security  🔑
+## Pairing and security
 
-The remote and fire perform **LE Legacy pairing, Passkey Entry, MITM required**
-(initiator IO cap = KeyboardDisplay, responder = DisplayOnly). Neither device has a
-keypad/display, so the passkey is **fixed in firmware**.
+The remote and fire use **LE legacy pairing with Passkey Entry (MITM required)** — the
+initiator's IO capability is KeyboardDisplay, the responder's is DisplayOnly. Neither has a
+keypad or screen, so the passkey is never shown or typed; it's baked into the firmware.
 
-- **Passkey = `584936`** (confirmed identical across two independent pairings on this unit).
-- Encryption is **mandatory**: control attributes return `0x05 INSUF_AUTHENTICATION`
-  until the link is MITM‑encrypted. **You cannot replay raw writes — you must pair.**
-- The fire shows `NOT BONDED` and re‑pairs each connection (no stored LTK), which is
-  what makes the passkey crackable offline.
+Two things follow from that:
+
+- **You can't replay raw commands.** Encryption is mandatory — control attributes return
+  `0x05 INSUF_AUTHENTICATION` until the link is MITM-encrypted. A client has to genuinely
+  pair, not just resend captured writes.
+- **The passkey can be cracked offline.** The fire reports `NOT BONDED` and re-pairs on
+  every connection (it keeps no long-term key), so one sniffed pairing is enough to
+  brute-force it.
+
+On the unit I tested, the passkey was **`584936`** — the same across two separate pairings
+of that fire. I only had one fire to go on, so I don't know whether that value is shared
+across the whole product line or unique to each unit. Try `584936` first; if it doesn't
+pair, crack your own with the steps below.
 
 ### Finding your passkey
 
-If `584936` doesn't pair your unit, crack it from a sniffed pairing:
+Crack it from a sniffed pairing:
 
 1. Sniff a remote→fire pairing with an nRF52840 + Wireshark (nRF Sniffer). You need the
    full handshake: Pairing Req/Rsp, both Confirm, both Random.
