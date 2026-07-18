@@ -1,143 +1,156 @@
-# How this was reverse‑engineered (and how to do it for *your* fire)
+# How I reverse-engineered the Dimplex Opti-myst (and how you can too)
 
-This is the story of how the Dimplex Opti‑myst BLE protocol was worked out from nothing,
-followed by a **step‑by‑step guide to replicate it** — useful if your unit differs (e.g.
-a **different pairing passkey**, or different control registers).
+I have a Dimplex Opti-myst Cassette 400 fire. It came with a Bluetooth remote and that's
+it: no app, no API, nothing you can point Home Assistant at. So I picked the protocol
+apart. This is roughly what I did, in order, including the bits that didn't work and the
+places I got stuck.
 
-For the *facts* (UUIDs, handles, values) see [PROTOCOL.md](PROTOCOL.md). This page is the
-*method*.
+If you just want the finished facts (UUIDs, handles, values), they're in
+[PROTOCOL.md](PROTOCOL.md). This page is the messier account of how I got there, and what
+you'd have to redo if your fire behaves differently from mine — a different pairing code
+being the most likely difference.
 
----
+## Figuring out what it is
 
-## Part 1 — The journey
+I started with nRF Connect on my phone and a throwaway ESP32 sketch, just to see what the
+fire looks like over Bluetooth. It advertises as `FI0514<Dimplex>` at `00:A0:50:D6:A5:14`,
+and that address prefix belongs to Cypress/Infineon, so it's one of their BLE modules.
 
-### 1. Recon: what is this thing?
-- Scanned with **nRF Connect** and an ESP32. The fire advertises as `FI####<Dimplex>`,
-  address `00:A0:50:D6:A5:14` (OUI `00:A0:50` = Cypress/Infineon BLE module).
-- Dumped its GATT: one custom service `00060000-F8CE-11E4-…` with characteristic
-  `00060001` (WRITE/NOTIFY). Looked like the control channel — it wasn't (the real
-  controls are raw attribute handles, see below).
-- An ESP32 could **connect** but the remote showed **`NO PROD`**, and writes did nothing.
+Dumping the GATT table showed one custom service (`00060000-F8CE-11E4-…`) with a
+characteristic (`00060001`) I could write to. I assumed that was the control channel. It
+wasn't — the actual commands go to plain attribute handles further down the table — but I
+didn't know that yet. The ESP32 connected fine, but nothing I wrote had any effect, and the
+remote just showed "NO PROD" when I tried to pair a second one. Something was clearly gating
+everything.
 
-### 2. The wall: it's encrypted
-- The fire shows `CONNECTED / NOT BONDED`, which first suggested "no security." Wrong.
-- Reading/writing the control attributes returned **`0x05 INSUF_AUTHENTICATION`** — the
-  link must be **encrypted**. The fire uses **LE Legacy pairing, Passkey Entry, MITM**.
-  You **cannot replay commands** — you must pair. That's why cloning/advertising failed.
+## The wall
 
-### 3. Capture the pairing (nRF Sniffer)
-- Flashed a **Nordic nRF52840 dongle** with **nRF Sniffer for Bluetooth LE** and captured
-  in **Wireshark**.
-- **The one critical trick:** in Wireshark's nRF Sniffer toolbar, select the fire in the
-  **"Device" dropdown while it is advertising (remote idle)** so the sniffer *follows the
-  connection*. Miss this and you only capture advertising packets — no commands. This is
-  the single most common failure.
-- Pressed buttons on the original remote to capture: `CONNECT_IND`, the SMP pairing
-  handshake, and the encrypted ATT writes.
+The fire reports "NOT BONDED", which had me convinced for a while that there was no
+security to deal with. There is. Every read or write to the control attributes comes back
+with error `0x05`, insufficient authentication. The fire only talks over an encrypted,
+paired link: LE legacy pairing, passkey, MITM. So recording what the remote sends and
+replaying it was never going to work. You have to genuinely pair. That's what finally
+killed the "just emulate the fireplace" idea I'd been chasing.
 
-### 4. Crack the passkey (crackle)
-- LE Legacy passkey pairing is only **20 bits** of entropy, so it cracks offline in
-  seconds with [`crackle`](https://github.com/mikeryan/crackle):
-  ```
-  crackle -i capture.pcapng -o decrypted.pcap
-  ```
-  → `TK found: 584936` — the pairing passkey — and it decrypts the session.
+## Sniffing the pairing
 
-### 5. Read the commands
-- crackle leaves the Nordic "encrypted" flag set, so Wireshark shows *"bad MIC"* even
-  though the plaintext is there. `tools/parse_att.py` walks the link layer and prints the
-  decrypted ATT reads/writes; `tools/crack_and_parse.sh` chains crackle + the parser.
-- This revealed: on‑connect init writes, and control by **raw attribute handles**
-  (`0x0040`, `0x0042`, …) — not the "obvious" `00060001` characteristic.
+To pair I needed the passkey, and to get the passkey I had to watch the real remote pair.
+I flashed a Nordic nRF52840 dongle with the nRF Sniffer firmware and captured in Wireshark.
 
-### 6. Build & pair from an ESP32
-- Key lesson: **use NimBLE, not Bluedroid.** Bluedroid + Wi‑Fi crashes on the ESP32
-  (`xQueueGenericSend` assert). NimBLE is light and coexists cleanly, and it achieved a
-  proper **MITM‑authenticated** link. (ESPHome's `ble_client` could not pair with the
-  fixed passkey at all — documented in PROTOCOL.md.)
-- NimBLE recipe: `setSecurityAuth(false, true, false)` (no‑bond, MITM, legacy),
-  `setSecurityIOCap(BLE_HS_IO_KEYBOARD_DISPLAY)`, reply to `onPassKeyEntry` with the
-  passkey, then `connect()` + `secureConnection()`, and write raw handles.
+This is where I lost the most time. The sniffer only follows one device, and you have to
+select the fire from the "Device" dropdown in Wireshark *while it's advertising, before the
+remote connects*. Get that wrong and you end up with a few thousand advertising packets and
+none of the actual conversation. I did exactly that three or four times before it stuck.
+When you've got it right, the packet list stops being a wall of `ADV_IND` and turns into a
+stream of data packets the moment the remote connects.
 
-### 7. Map the rest without a sniffer (register‑diff)
-- Following the remote's brief connections in the sniffer was flaky, so most controls were
-  mapped with a **register‑diff**: dump every readable register, change **one** setting on
-  the remote (ESP disconnected), dump again, `diff`. That's how **Volume (`0x0076`)**, the
-  **clock (`0x0010/0x0012`)** and the real **flame level (`0x0042`, *not* `0x0040`)** were
-  found. `Dimplex_Dump/` is that tool.
+## Cracking it
 
-### Dead‑ends worth knowing
-- Emulating the fire / replaying raw packets — impossible (authenticated encryption).
-- ESPHome `ble_client` — pairs but never gets an authenticated link for writes.
-- Bluedroid + Wi‑Fi — reboot loop; NimBLE fixed it.
-- Vendor apps (*Flame Connect*, *Faber ITC*) — a **newer** protocol (`713d…`), not this
-  one; decompiling them didn't help. This generation is undocumented anywhere public.
+LE legacy pairing is weak. The passkey is effectively 20 bits, so once you've captured the
+pairing handshake you can brute-force it offline. [crackle](https://github.com/mikeryan/crackle)
+does exactly that:
 
----
+    crackle -i capture.pcapng -o decrypted.pcap
 
-## Part 2 — Replicate it for your own fire
+A couple of seconds later it printed `TK found: 584936`. That's the passkey. It decrypts the
+rest of the captured session at the same time.
 
-Do this if the defaults don't work — most likely a **different passkey** (it may be
-per‑unit) or **different registers** on your model.
+Small trap: crackle leaves a flag set that makes Wireshark believe the decrypted packets are
+still encrypted, so it shows "bad MIC" and refuses to parse them. The plaintext is right
+there, Wireshark is just being fussy. I wrote a little script, `tools/parse_att.py`, to walk
+the packets and print the ATT reads and writes; `tools/crack_and_parse.sh` does both steps
+in one shot. That's where the real protocol showed up: a couple of setup writes on connect,
+then commands to raw handles like `0x0040` and `0x0042`, not the `00060001` characteristic
+I'd been staring at.
 
-### You'll need
-- A **Nordic nRF52840** dongle (BLE sniffer) + **Wireshark** with the **nRF Sniffer for
-  Bluetooth LE** extcap plugin.
-- **[crackle](https://github.com/mikeryan/crackle)** (build from source: `git clone … && make`).
-- An **ESP32** (this repo targets M5Stack Atom Lite) + `arduino-cli`.
-- This repo's `tools/` scripts.
+## Getting an ESP32 to pair
 
-### Step 1 — Find your fire
-Scan (nRF Connect, or the ESP). Note its **BLE address** and advertised name
-(`FI####<Dimplex>`). Put the address in `FIRE_ADDR` in `Dimplex_MQTT.ino`.
+Two false starts here that are worth passing on.
 
-### Step 2 — Sniff a pairing
-1. Fire powered, **remote idle** (fire advertising).
-2. Wireshark → start the **nRF Sniffer** capture.
-3. **Select your fire in the "Device" dropdown *before* touching the remote** (so it
-   follows the connection — confirm the packet list fills with *data* packets, not just
-   `ADV_IND`, once the remote connects).
-4. Press remote buttons; **Stop**; **Save As** `capture.pcapng`.
+I tried ESPHome first, since Home Assistant was the whole point. Its `ble_client` connects
+and even completes pairing, but I could never get the writes to go through — they kept
+failing with insufficient authentication, and I burned a fair bit of time before writing it
+off.
 
-### Step 3 — Crack your passkey
-```
-./crackle/crackle -i capture.pcapng -o decrypted.pcap
-```
-Read the `TK found: NNNNNN` line — **that is your passkey.** Put it in `PASSKEY` in
-`Dimplex_MQTT.ino`. (Or run `tools/crack_and_parse.sh capture.pcapng` to crack **and**
-print the decrypted ATT writes in one go.)
+Then I used the Arduino BLE stack (Bluedroid) and hit a different problem: as soon as WiFi
+and BLE were both up, it crashed in a FreeRTOS assert and sat in a reboot loop. Bluedroid
+and WiFi fighting over the one radio is apparently a well-known headache.
 
-### Step 4 — Confirm the control handles
-In the decrypted output, find the `WRITE_REQ` to raw handles when you pressed on/off and
-flame. On this unit: `0x0040` = power (`0x06`/`0x00`), `0x0042` = flame level `1–6`,
-`0x0076` = volume. If yours match, you're done — flash `Dimplex_MQTT`.
+Switching the BLE side to NimBLE fixed both. It's much lighter, it coexists with WiFi
+without falling over, and it actually establishes a proper authenticated link. What worked:
+no bonding, MITM on, legacy pairing, keyboard/display IO capability, hand the passkey back
+when it's asked for, connect, secure the connection, then write.
 
-### Step 5 — If your registers differ: register‑diff
-If the handles/values aren't the same, map them empirically with `Dimplex_Dump/`:
-1. Flash `Dimplex_Dump` (set your `PASSKEY`/`FIRE_ADDR`), power on → it prints a full dump
-   (snapshot **A**).
-2. **Unplug the ESP** (frees the fire's single BLE connection).
-3. Change **one** setting on the remote (e.g. flame up, or volume).
-4. Plug the ESP back in → snapshot **B**.
-5. `diff` A vs B → the register that changed is that control. Repeat per setting.
-6. Update the handles in `Dimplex_MQTT.ino` accordingly.
+## Mapping the rest of the buttons
+
+I had on/off and a rough idea where flame lived, but not volume, the clock, or how the
+intensity scale actually worked. Sniffing each remote press was miserable because the remote
+only connects for a split second and the sniffer kept missing it.
+
+So I gave up on the sniffer for this part and used the ESP instead. Only one thing can hold
+the connection at a time, which turns into a decent trick: connect the ESP, dump every
+readable register, unplug it, change one setting on the remote, plug it back in, dump again,
+and diff the two. Whatever moved is the setting you just changed.
+
+That found volume (`0x0076`), the clock (`0x0010`/`0x0012`, literally the date and time as
+bytes), and — after I got it wrong the first time — the fact that the flame level is handle
+`0x0042`, not `0x0040`. `0x0040` is only on/off. I'd been writing the level into the on/off
+register, which is why only some of the values appeared to do anything.
+
+## Things that don't work, so you can skip them
+
+Replaying captured packets or pretending to be the fireplace: no, it's encrypted, you have
+to pair. ESPHome's `ble_client` for this fire: it won't hold the authenticated link.
+Bluedroid plus WiFi on an ESP32: use NimBLE instead. And the official apps (Flame Connect,
+Faber ITC): I decompiled both, and they speak a newer protocol (`713d…`) for newer fires and
+know nothing about this generation. As far as I can find, this one isn't documented anywhere
+public.
 
 ---
 
-## Part 3 — Troubleshooting
+# Doing this on your own fire
 
-| Symptom | Likely cause / fix |
-|---|---|
-| Sniffer capture has only `ADV_IND`, no data | You didn't **follow the device** — select it in the "Device" dropdown *before* the remote connects (Step 2.3). |
-| `crackle` says "0 connections" | The pairing handshake wasn't captured (see above), or the remote was already connected when you started following. |
-| crackle output shows "bad MIC" in Wireshark | Expected — the plaintext is there; use `tools/parse_att.py` to read it. |
-| ESP pairs (`auth complete success=1`) but writes fail `0x05` | Link isn't MITM‑authenticated. Use NimBLE with `AUTH_REQ` on the op, not out‑of‑band encryption (see Part 1.6). |
-| ESP reboots when Wi‑Fi + BLE both on | You're on Bluedroid — switch to **NimBLE**. |
-| Pairing fails with your passkey | It may be per‑unit — crack **your** capture (Step 3). |
-| Only some flame levels "work" | You're writing the level to the on/off register — the level is a **separate** handle (`0x0042` here). |
-| Fire beeps twice on power‑on | Each accepted write beeps once; don't send a redundant second write. Two beeps *from the remote/idle* instead means **low water** (refill + power‑cycle). |
+If my passkey (`584936`) doesn't pair your unit, or the handles come out different, here's
+the short version of how to redo it. I only had one fire to test, so the passkey may well be
+per-unit.
+
+You'll need a Nordic nRF52840 dongle with Wireshark and the nRF Sniffer plugin, crackle
+(clone and `make` it — it's GPL, so it's not bundled here), an ESP32 (I used an M5Stack Atom
+Lite), and the scripts in `tools/`.
+
+1. Scan for your fire (nRF Connect or the ESP) and note its address. Put it in `FIRE_ADDR`
+   in `Dimplex_MQTT.ino`.
+
+2. Sniff a pairing. Start the nRF Sniffer capture, pick your fire in the Device dropdown
+   while it's advertising and the remote is idle, then press some buttons on the remote.
+   Check that data packets actually show up, not just adverts. Stop and save.
+
+3. Crack your passkey: `crackle -i capture.pcapng -o decrypted.pcap`, read the `TK found`
+   line, and drop that number into `PASSKEY`. (Or just run
+   `tools/crack_and_parse.sh capture.pcapng`, which cracks it and prints the decoded writes.)
+
+4. Look at the decoded writes for on/off and flame. If the handles match mine (`0x0040`
+   power, `0x0042` level, `0x0076` volume), flash `Dimplex_MQTT` and you're done.
+
+5. If they don't match, map them with the dump tool. Flash `Dimplex_Dump`, let it print a
+   full register dump, unplug the ESP, change one setting on the remote, plug it back in,
+   dump again, and diff. Repeat per control and update the handles in `Dimplex_MQTT.ino`.
+
+## When it goes wrong
+
+If your capture is nothing but `ADV_IND`, you didn't follow the device — select it in the
+Device dropdown before the remote connects. If crackle reports zero connections, it didn't
+catch the pairing handshake (same cause), or the remote was already connected when you
+started following. If Wireshark shows "bad MIC" on the decrypted file, that's expected;
+read it with `parse_att.py`. If the ESP pairs but writes still fail with `0x05`, the link
+isn't authenticated — use NimBLE and let the GATT op carry the auth requirement rather than
+encrypting out of band. If the ESP reboots whenever WiFi and BLE are both on, you're on
+Bluedroid; switch to NimBLE. If only some flame levels seem to work, you're probably writing
+the level into the on/off register instead of the separate level handle. And if the fire
+beeps twice from idle (not just from an extra command), that's the low-water warning —
+refill and power-cycle it.
 
 ---
 
-*Not affiliated with Dimplex / Glen Dimplex. Reverse‑engineered for interoperability of a
-device the author owns.*
+*Not affiliated with Dimplex or Glen Dimplex. I reverse-engineered this for a fire I own, so
+I could use it with Home Assistant.*
