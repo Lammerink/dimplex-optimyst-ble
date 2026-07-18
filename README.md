@@ -75,6 +75,11 @@ opens a **captive‑portal setup page**:
    password**.
 4. Save → it reboots, connects, and the device appears in Home Assistant.
 
+> **Use your own MQTT credentials.** The firmware ships with example defaults
+> (`dimplex`/`dimplex`, the author's local broker). Enter **your** broker's username and
+> password in the portal (or edit them in `Dimplex_MQTT.ino`). Wi‑Fi credentials are only
+> ever entered via the portal, never stored in the source.
+
 ### Web control page
 
 Once on your network, the bridge serves a small **control page** at

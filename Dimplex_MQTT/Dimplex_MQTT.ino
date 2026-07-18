@@ -31,14 +31,16 @@ static const uint32_t PASSKEY = 584936;
 static NimBLEAddress FIRE_ADDR("00:a0:50:d6:a5:14", BLE_ADDR_PUBLIC);
 
 // ---- MQTT settings (defaults) ----
-// These are defaults; they can be overridden at runtime via the "Dimplex-Setup" WiFi
-// portal (saved to flash). WiFi credentials are NEVER stored in source - only via the
-// portal. NOTE: if you publish this repo, these MQTT creds become public - use a
-// throwaway/local broker account (or blank them and use the portal).
+// >>> USE YOUR OWN MQTT CREDENTIALS <<<
+// The user/pass below ("dimplex"/"dimplex") are the author's LOCAL broker account, kept
+// only as an example. Replace them with your own broker's username/password - either edit
+// them here, or (recommended) leave them and set your own at runtime via the "Dimplex-Setup"
+// WiFi portal, which saves to flash and overrides these. Wi-Fi credentials are NEVER stored
+// in source; they are entered only through the portal.
 static char cfg_host[40] = "homeassistant.local";  // MQTT broker: IP, hostname, or *.local (mDNS)
 static char cfg_port[6]  = "1883";
-static char cfg_user[32] = "dimplex";   // MQTT username
-static char cfg_pass[40] = "dimplex";   // MQTT password
+static char cfg_user[32] = "dimplex";   // <-- change to your MQTT username (or set via portal)
+static char cfg_pass[40] = "dimplex";   // <-- change to your MQTT password (or set via portal)
 
 Preferences prefs;
 WiFiManager wm;
