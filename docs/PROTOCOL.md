@@ -100,7 +100,7 @@ water level may live in one of the read‑only `0x10xx` sensor registers (unmapp
 2. **Crack + decrypt** the LE‑legacy pairing with `crackle` → readable ATT writes.
 3. For mapping individual settings, the **ESP register‑diff** method proved far more
    reliable than sniffing the remote's brief connections: dump all registers, change one
-   setting on the remote (ESP disconnected), dump again, diff. (See `Dimplex_Dump`.)
+   setting on the remote (ESP disconnected), dump again, diff. (See `tools/Dimplex_Dump`.)
 
 ## Dead‑ends (so you don't repeat them)
 

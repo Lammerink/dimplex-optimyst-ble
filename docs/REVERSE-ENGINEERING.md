@@ -129,7 +129,7 @@ the `tools/` scripts.
 4. Check the handles in those decoded writes. If on/off, flame and volume land on the same
    handles as mine (`0x0040`, `0x0042`, `0x0076`), you're done.
 
-5. If they don't match, map yours with the dump tool. Flash `Dimplex_Dump`, let it print a
+5. If they don't match, map yours with the dump tool. Flash `tools/Dimplex_Dump`, let it print a
    full register dump, unplug the ESP, change one setting on the remote, plug it back in,
    dump again, diff the two. One control at a time. Then put your handles in
    `Dimplex_MQTT.ino`.

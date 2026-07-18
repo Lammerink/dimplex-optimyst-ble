@@ -52,12 +52,12 @@ catches up within a few seconds.
 
 ## Firmware
 
-Two sketches (Arduino, ESP32 core 3.x):
+The bridge you run day‑to‑day is **[`Dimplex_MQTT/`](Dimplex_MQTT)** (Arduino, ESP32 core
+3.x) — NimBLE + MQTT auto‑discovery + a Wi‑Fi/MQTT setup portal.
 
-- **[`Dimplex_MQTT/`](Dimplex_MQTT)** — the bridge you run day‑to‑day. NimBLE + MQTT
-  auto‑discovery + a Wi‑Fi/MQTT setup portal.
-- **[`Dimplex_Dump/`](Dimplex_Dump)** — a tool that pairs and dumps every readable
-  register, for mapping new settings (see *Mapping more controls* below).
+There's also a diagnostic sketch, **[`tools/Dimplex_Dump/`](tools/Dimplex_Dump)**, that pairs
+and dumps every readable register — used only for mapping new settings (see *Mapping more
+controls* below), not for normal use.
 
 **Libraries:** `NimBLE-Arduino` (≥2.x), `PubSubClient`, `WiFiManager`.
 **Why NimBLE:** the Bluedroid stack crashes when BLE + Wi‑Fi run together on the ESP32;
@@ -123,9 +123,9 @@ are stored in flash; Wi‑Fi credentials are never written to source.
 
 The remote has settings we haven't exposed yet (timer, brightness, DST…). The reliable
 way to decode any of them — without a BLE sniffer — is the **register‑diff method** with
-`Dimplex_Dump`:
+[`tools/Dimplex_Dump`](tools/Dimplex_Dump):
 
-1. Flash `Dimplex_Dump`, power on → it prints a full register dump (snapshot **A**).
+1. Flash `tools/Dimplex_Dump`, power on → it prints a full register dump (snapshot **A**).
 2. **Unplug the Atom** (frees the fireplace's single BLE connection).
 3. Change **one** setting on the physical remote.
 4. Plug the Atom back in → snapshot **B**.
@@ -135,8 +135,10 @@ This is exactly how Volume (`0x0076`) and the clock (`0x0010/0x0012`) were found
 
 ## Tools (`tools/`)
 
-Helper scripts used during reverse‑engineering (macOS):
+Helpers used during reverse‑engineering (macOS):
 
+- **[`Dimplex_Dump/`](tools/Dimplex_Dump)** — Arduino sketch that pairs and dumps every
+  readable register, for the register‑diff mapping method (see *Mapping more controls*).
 - `serial_read.py` — read the ESP's USB serial (and send commands); no Arduino Serial
   Monitor needed.
 - `crack_and_parse.sh` / `parse_att.py` — crack a sniffed pairing with
