@@ -1,10 +1,10 @@
 # Dimplex Opti‑myst (Cassette 400 / CAS400LNH) → Home Assistant over BLE
 
-Control a **Dimplex Opti‑myst Cassette electric fire** (the older Bluetooth‑remote
+Control a **Dimplex Opti‑myst Cassette electric fireplace** (the older Bluetooth‑remote
 generation, BLE service `00060000‑f8ce‑11e4‑…`) from **Home Assistant**, using an
 **M5Stack Atom Lite (ESP32)** as a BLE↔MQTT bridge.
 
-This fire pairs with its remote using **authenticated Bluetooth pairing (LE legacy
+This Dimplex fireplace pairs with its remote using **authenticated Bluetooth pairing (LE legacy
 passkey)** — so you *cannot* just replay commands; you have to pair. There is **no
 public documentation or app** for this generation's protocol (the current Dimplex/Faber
 apps speak a newer, different protocol). This repo is the result of reverse‑engineering
@@ -27,12 +27,25 @@ Auto‑discovered MQTT device **"Dimplex CAS400LNH"** with:
 | **Volume** | number 0–6 | sound (0 = off) |
 | **Flame intensity state** | sensor | current level |
 
-State is polled every ~8 s, so changes made with the **physical remote** show up in HA too.
+State is polled every ~8 s, so if the fireplace changes on its own (e.g. it powers off) HA
+catches up within a few seconds.
+
+> **On low water:** the fireplace has a low‑water flag (byte 2 of `0x0040`), but we never fully
+> worked out its behaviour — it's a latch that trips during use, doesn't clear on a refill,
+> and only resets on a mains power‑cycle, so it can't reliably say "needs water right now."
+> For that reason this project **doesn't expose it as a sensor**. If you want to experiment
+> with it, see [docs/PROTOCOL.md](docs/PROTOCOL.md#low-water-flag).
+
+> ⚠️ **The handheld BLE remote won't work while the bridge is connected.** The fireplace
+> only accepts **one** Bluetooth connection at a time, and the bridge holds it continuously.
+> While the Atom is running you control the fireplace from Home Assistant (or the web page),
+> not the remote. To use the original remote again, power off the Atom to free the
+> connection.
 
 ## Hardware
 
 - **M5Stack Atom Lite** (ESP32‑PICO‑D4) — Arduino board type **`M5Atom`**.
-- A Dimplex Opti‑myst Cassette fire of the BLE‑remote generation (advertises as
+- A Dimplex Opti‑myst Cassette fireplace of the BLE‑remote generation (advertises as
   `FI####<Dimplex>`, service `00060000‑f8ce‑11e4‑abf4‑0002a5d5c51c`).
 - An MQTT broker reachable by the ESP (e.g. the Mosquitto add‑on in Home Assistant).
 
@@ -53,8 +66,10 @@ see PROTOCOL.md).
 ### Build & flash
 
 Using the Arduino IDE: select board **M5Atom**, install the three libraries, open
-`Dimplex_MQTT/Dimplex_MQTT.ino`, set your fire's BLE address (and passkey if needed),
-upload.
+`Dimplex_MQTT/Dimplex_MQTT.ino` and upload — **no code edits needed**. The bridge
+auto‑detects your fireplace by its advertised name and pairs with the default passkey; you
+can pin a specific unit's BLE address or change the passkey later in the setup portal (see
+below). Only edit the sketch if you'd rather bake those in.
 
 Or with `arduino-cli`:
 
@@ -77,8 +92,15 @@ opens a **captive‑portal setup page**:
    password**.
 4. Save → it reboots, connects, and the device appears in Home Assistant.
 
+**Fireplace (usually leave alone).** The portal also scans for nearby fireplaces and shows
+a **picker** — but you can ignore it: leave the address **blank** and the bridge
+auto‑detects the fireplace by name (`FI####<Dimplex>`). Only use the picker/address field
+if you have more than one fireplace, or auto‑detect finds the wrong one. The **passkey**
+field is pre‑filled with `584936`; change it only if that doesn't pair your unit
+([find yours](docs/PROTOCOL.md#finding-your-passkey)).
+
 > **Use your own MQTT credentials.** The firmware ships with example defaults
-> (`dimplex`/`dimplex`, the author's local broker). Enter **your** broker's username and
+> (`dimplex`/`dimplex`). Enter **your** broker's username and
 > password in the portal (or edit them in `Dimplex_MQTT.ino`). Wi‑Fi credentials are only
 > ever entered via the portal, never stored in the source.
 
@@ -103,7 +125,7 @@ way to decode any of them — without a BLE sniffer — is the **register‑diff
 `Dimplex_Dump`:
 
 1. Flash `Dimplex_Dump`, power on → it prints a full register dump (snapshot **A**).
-2. **Unplug the Atom** (frees the fire's single BLE connection).
+2. **Unplug the Atom** (frees the fireplace's single BLE connection).
 3. Change **one** setting on the physical remote.
 4. Plug the Atom back in → snapshot **B**.
 5. `diff` A vs B → the register that changed is that setting.

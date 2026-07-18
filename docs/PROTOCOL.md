@@ -76,7 +76,7 @@ WRITE 0x0087 = 00 00 00
 
 This firmware replays these on connect; control writes to `0x0040` are honoured after.
 
-### Low‑water flag
+### Low-water flag
 
 Byte 2 of `0x0040` is a **latched** low‑water warning: it trips when the mist runs the
 water low, **stays set through a refill**, and clears only on a **mains power‑cycle**
