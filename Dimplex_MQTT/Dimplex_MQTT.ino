@@ -243,7 +243,7 @@ static void bleConnect() {
 
 // ---------------- MQTT ----------------
 static void publishDiscovery() {
-  const char *dev = "\"dev\":{\"ids\":[\"dimplex_f000b540\"],\"name\":\"Dimplex CAS400LNH\",\"mf\":\"Dimplex\",\"mdl\":\"CAS400LNH\"}";
+  const char *dev = "\"dev\":{\"ids\":[\"dimplex_cas400\"],\"name\":\"Dimplex CAS400LNH\",\"mf\":\"Dimplex\",\"mdl\":\"CAS400LNH\"}";
   char b[480];
   snprintf(b, sizeof(b), "{\"name\":\"Fireplace\",\"uniq_id\":\"dimplex_power\",\"cmd_t\":\"%s\",\"stat_t\":\"%s\",\"pl_on\":\"ON\",\"pl_off\":\"OFF\",\"avty_t\":\"%s\",\"ic\":\"mdi:fireplace\",%s}", T_PWR_CMD, T_PWR_ST, T_AVAIL, dev);
   g_mqtt.publish("homeassistant/switch/dimplex/power/config", b, true);

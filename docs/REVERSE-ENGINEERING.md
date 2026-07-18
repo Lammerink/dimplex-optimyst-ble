@@ -14,9 +14,9 @@ warts and all. If you only want the end result (the UUIDs and handles), read
 
 ## Poking at it
 
-I scanned it with nRF Connect and a small ESP32 sketch. It shows up as `FI0514<Dimplex>` on
-`00:A0:50:D6:A5:14`. That address prefix is Cypress/Infineon, so it's one of their BLE
-modules inside.
+I scanned it with nRF Connect and a small ESP32 sketch. It shows up as `FI####<Dimplex>`,
+and its address starts `00:A0:50` — Cypress/Infineon, so it's one of their BLE modules
+inside.
 
 There's one custom service, `00060000-F8CE-11E4-…`, with a writable characteristic
 (`00060001`). I figured that was the control channel. Wrong. The commands actually go to

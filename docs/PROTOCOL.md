@@ -12,10 +12,10 @@ Dimplex *Flame Connect* / Faber *ITC* apps speak a different, newer protocol and
 | | |
 |---|---|
 | Model | Dimplex Opti‑myst Cassette 400, `CAS400LNH` |
-| Advertised name | `FI0514<Dimplex>` |
-| BLE address | `00:A0:50:D6:A5:14` (public; OUI `00:A0:50` = Cypress/Infineon) |
+| Advertised name | `FI####<Dimplex>` (the `####` is derived from the unit's address) |
+| BLE address | `00:A0:50:XX:XX:XX` (public; OUI `00:A0:50` = Cypress/Infineon; unit-specific bytes redacted) |
 | Firmware (reg `0x0095`) | `EP4120` |
-| Serial (reg `0x009b`) | `F000B540` |
+| Serial (reg `0x009b`) | `F000XXXX` (unit-specific, redacted) |
 | Custom service | `00060000-F8CE-11E4-ABF4-0002A5D5C51C` |
 | “Known” characteristic | `00060001-…` (value handle `0x00A2`, props NOTIFY/WRITE) — **not** the control channel |
 

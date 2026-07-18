@@ -12,7 +12,7 @@
 #include <NimBLEDevice.h>
 
 static const uint32_t PASSKEY = 584936;
-static NimBLEAddress FIRE_ADDR("00:a0:50:d6:a5:14", BLE_ADDR_PUBLIC);
+#define FP_NAME_MATCH "Dimplex"        // auto-detect the fire by advertised name ("FI####<Dimplex>")
 static NimBLEClient *g_client = nullptr;
 static volatile bool g_connected = false, g_paired = false;
 static bool g_dumped = false;
@@ -27,6 +27,21 @@ class CB : public NimBLEClientCallbacks {
 
 static String hx(const NimBLEAttValue &v) {
   String s; for (size_t i = 0; i < v.length(); i++) { char b[3]; sprintf(b, "%02x", v[i]); s += b; } return s;
+}
+
+// Scan for a fireplace by advertised name (so no hardcoded per-unit address).
+static bool discoverFireplace(NimBLEAddress &out) {
+  NimBLEScan *scan = NimBLEDevice::getScan();
+  scan->setActiveScan(true);
+  NimBLEScanResults res = scan->getResults(4000, false);
+  bool found = false;
+  for (int i = 0; i < res.getCount(); i++) {
+    const NimBLEAdvertisedDevice *d = res.getDevice(i);
+    if (String(d->getName().c_str()).indexOf(FP_NAME_MATCH) < 0) continue;
+    out = d->getAddress(); found = true; break;
+  }
+  scan->clearResults();
+  return found;
 }
 
 static void dumpAll() {
@@ -54,8 +69,10 @@ void loop() {
   if (!g_connected) {
     g_client = g_client ? g_client : NimBLEDevice::createClient();
     g_client->setClientCallbacks(new CB(), false);
-    Serial.println("[ble] connecting...");
-    if (g_client->connect(FIRE_ADDR) && g_client->secureConnection()) {
+    NimBLEAddress target;
+    if (!discoverFireplace(target)) { Serial.println("[ble] no fireplace found, retrying"); delay(2000); return; }
+    Serial.printf("[ble] connecting to %s...\n", target.toString().c_str());
+    if (g_client->connect(target) && g_client->secureConnection()) {
       Serial.println("[ble] paired");
     } else { Serial.println("[ble] connect/pair failed, retrying"); delay(3000); return; }
   }
